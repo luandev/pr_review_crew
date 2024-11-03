@@ -1,7 +1,19 @@
 fetch_prs:
   description: "Fetch open PRs from the repository."
   expected_output: "A list of open PRs with metadata including title, description, and file changes."
-
+  
 review_prs:
-  description: "Analyze each PR and leave comments with questions or suggestions."
-  expected_output: "Comments on the PR discussing potential improvements or requesting clarifications."
+  description: "Review open PRs in the repository and provide feedback based on agent roles and expertise."
+  expected_output: "A clear and complete sumnmary from the agent's perspective."
+
+define_actions_task:
+  description: "Define specific actions on PR."
+  expected_output: "Compile feedback from review and create a list of actions to be executed, either comments or commits"
+
+execute_actions_task:
+  description: "Apply changes"
+  expected_output: "from the list of actions, prepare and execute all changes to be made on the pull request"
+
+summary_task:
+  description: "Compile feedback from all agents and post a summary comment on the PR."
+  expected_output: "Compile feedback from all agents and post a summary comment on the PR. End execution of review"
