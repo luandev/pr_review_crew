@@ -1,55 +1,39 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
-
-# Uncomment the following line to use an example of a custom tool
-# from pr_review_crew.tools.custom_tool import MyCustomTool
-
-# Check our tools documentations for more information on how to use them
-# from crewai_tools import SerperDevTool
+from pr_review_crew.tools.pr_review_tool import PrReviewTool  # Import the custom tool
 
 @CrewBase
-class PrReviewCrewCrew():
-	"""PrReviewCrew crew"""
-	agents_config = 'config/agents.yaml'
-	tasks_config = 'config/tasks.yaml'
+class PrReviewCrewCrew:
+    """Crew for reviewing open PRs on a repository."""
+    agents_config = 'config/agents.yaml'
+    tasks_config = 'config/tasks.yaml'
+    repo = "owner/repo"  # Set your GitHub repository here
 
-	@agent
-	def researcher(self) -> Agent:
-		return Agent(
-			config=self.agents_config['researcher'],
-			# tools=[MyCustomTool()], # Example of custom tool, loaded on the beginning of file
-			verbose=True
-		)
+    @agent
+    def pr_reviewer(self) -> Agent:
+        # Initialize the tool with the repository name
+        pr_review_tool = PrReviewTool(repo=self.repo)
 
-	@agent
-	def reporting_analyst(self) -> Agent:
-		return Agent(
-			config=self.agents_config['reporting_analyst'],
-			verbose=True
-		)
+        return Agent(
+            config=self.agents_config['pr_reviewer'],
+            tools=[pr_review_tool],  # Attach the PR review tool to this agent
+            verbose=True
+        )
 
-	@task
-	def research_task(self) -> Task:
-		return Task(
-			config=self.tasks_config['research_task'],
-			agent=self.researcher()
-		)
+    @task
+    def review_prs_task(self) -> Task:
+        """Task to review PRs using the PR Review Tool."""
+        return Task(
+            config=self.tasks_config['review_prs'],
+            agent=self.pr_reviewer(),
+        )
 
-	@task
-	def reporting_task(self) -> Task:
-		return Task(
-			config=self.tasks_config['reporting_task'],
-			agent=self.reporting_analyst(),
-			output_file='report.md'
-		)
-
-	@crew
-	def crew(self) -> Crew:
-		"""Creates the PrReviewCrew crew"""
-		return Crew(
-			agents=self.agents, # Automatically created by the @agent decorator
-			tasks=self.tasks, # Automatically created by the @task decorator
-			process=Process.sequential,
-			verbose=2,
-			# process=Process.hierarchical, # In case you wanna use that instead https://docs.crewai.com/how-to/Hierarchical/
-		)
+    @crew
+    def crew(self) -> Crew:
+        """Creates the PrReviewCrew crew for reviewing PRs."""
+        return Crew(
+            agents=self.agents,  # Automatically created by the @agent decorator
+            tasks=self.tasks,    # Automatically created by the @task decorator
+            process=Process.sequential,
+            verbose=2,
+        )
