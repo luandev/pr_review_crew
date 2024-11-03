@@ -1,6 +1,8 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from pr_review_crew.tools.pr_review_tool import PrReviewTool  # Assuming we use this tool for all agents
+import requests
+import os
 
 @CrewBase
 class PrReviewCrewCrew:
@@ -27,6 +29,7 @@ class PrReviewCrewCrew:
             tools=[pr_review_tool],
             verbose=True
         )
+    #//TODO we need to add a agent specific for looking for areas where we could be testing to increate code coverage
 
     @agent
     def staff_engineer(self) -> Agent:
@@ -46,41 +49,66 @@ class PrReviewCrewCrew:
             verbose=True
         )
 
-    # Define tasks that assign PR review to each agent
-    @task
-    def review_by_pr_reviewer(self) -> Task:
+    # Define tasks for each agent's PR review
+    def review_task(self, agent):
+        """Create a review task for an agent."""
         return Task(
             config=self.tasks_config['review_prs'],
-            agent=self.pr_reviewer(),
+            agent=agent,
         )
 
     @task
-    def review_by_project_owner(self) -> Task:
-        return Task(
-            config=self.tasks_config['review_prs'],
-            agent=self.project_owner(),
-        )
+    def summary_task(self) -> Task:
+        """Creates a summary comment on the PR with feedback from all agents."""
+        
+        def post_summary_comment(pr_number, summary_content):
+            """Posts a summary comment on a GitHub PR."""
+            url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
+            headers = {
+                "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            data = {"body": summary_content}
+            response = requests.post(url, headers=headers, json=data)
 
-    @task
-    def review_by_staff_engineer(self) -> Task:
-        return Task(
-            config=self.tasks_config['review_prs'],
-            agent=self.staff_engineer(),
-        )
+            if response.status_code == 201:
+                print(f"Posted summary comment on PR #{pr_number}")
+            else:
+                print(f"Failed to post summary comment: {response.status_code} - {response.text}")
 
-    @task
-    def review_by_project_manager(self) -> Task:
+        def compile_feedback(pr_number):
+            """Collects and compiles feedback from all agents into a single summary."""
+            feedback = {
+                "Senior Software Engineer": self.pr_reviewer().last_response,
+                "Project Owner": self.project_owner().last_response,
+                "Staff Engineer": self.staff_engineer().last_response,
+                "Project Manager": self.project_manager().last_response
+            }
+
+            # Format feedback into a summary
+            summary_content = "### PR Review Summary\n"
+            for role, comments in feedback.items():
+                summary_content += f"\n**{role} Feedback:**\n{comments}\n"
+
+            # Post the summary comment to the PR
+            post_summary_comment(pr_number, summary_content)
+
+        # Example: assuming we run this for a specific PR number (e.g., PR #1)
+        compile_feedback(pr_number=1)
+
         return Task(
-            config=self.tasks_config['review_prs'],
-            agent=self.project_manager(),
+            description="Compile and post a summary of all agent feedback on the PR.",
+            task_function=compile_feedback,
+            agent=self.project_owner()  # Assign one agent for task completion tracking
         )
 
     @crew
     def crew(self) -> Crew:
-        """Creates the PrReviewCrew crew with sequential or parallel PR review tasks."""
+        """Creates the PrReviewCrew crew with PR review tasks and a summary task."""
         return Crew(
-            agents=self.agents,  # Automatically created by the @agent decorator
-            tasks=self.tasks,    # Automatically created by the @task decorator
-            process=Process.sequential,  # Run agents' reviews in parallel for diverse feedback
+            agents=self.agents,
+            tasks=self.tasks,
+            process=Process.sequential,  # Ensure tasks run in sequence to collect feedback
+            postprocess=self.summary_task,  # Run summary task after all other tasks
             verbose=2,
         )
