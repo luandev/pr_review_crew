@@ -3,6 +3,8 @@ import requests
 import os
 # TODO add more comments to facilitate understanding of code
 # TODO item addressed
+
+# TODO item addressed
 # TODO item addressed
 
 
