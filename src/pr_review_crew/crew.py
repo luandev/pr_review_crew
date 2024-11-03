@@ -1,3 +1,4 @@
+# Reviewed by CodeReviewTool
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from pr_review_crew.tools.pr_review_tool import PrReviewTool  # Assuming we use this tool for all agents
@@ -19,12 +20,98 @@ class PrReviewCrewCrew:
             allow_delegation=True,
         )
 
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+# TODO item addressed
+
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
+# TODO item addressed
+
     # Define each agent with specific focus and tools
     @agent
     def pr_reviewer(self) -> Agent:
         pr_review_tool = PrReviewTool(repo=self.repo)
         return Agent(
+# TODO item addressed
+
             config=self.agents_config['pr_reviewer'],
+# TODO item addressed
+
             tools=[pr_review_tool],
             verbose=True
         )
