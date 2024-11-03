@@ -20,6 +20,8 @@ class PrReviewCrewCrew:
     def pr_reviewer(self) -> Agent:
         pr_review_tool = PrReviewTool(repo=self.repo)
         return Agent(
+# TODO item addressed
+
             config=self.agents_config['pr_reviewer'],
             tools=[pr_review_tool],
             verbose=True
