@@ -6,61 +6,43 @@ import os
 from crewai_tools.tools.github_search_tool.github_search_tool import GithubSearchTool
 
 
-
 @CrewBase
 class PrReviewCrewCrew:
     repo = os.getenv("REPO")
 
-    def manager(self) -> Agent:
-        return Agent(
-            role="Project Manager",
-            goal="Efficiently manage the crew and ensure high-quality task completion",
-            backstory="You're an experienced project manager, skilled in overseeing complex projects and \
-guiding teams to success. Your role is to coordinate the efforts of the crew members, \
-ensuring that each task is completed on time and to the highest standard.",
-            allow_delegation=True,
-        )
-
     @agent
     def pr_reviewer(self) -> Agent:
         pr_review_tool = PrReviewTool(repo=self.repo)
-        githubSearchTool = GithubSearchTool(gh_token=os.environ["GITHUB_TOKEN"], content_types=['code', 'repo', 'pr', 'issue']) 
+        githubSearchTool = GithubSearchTool(
+            gh_token=os.environ["GITHUB_TOKEN"],
+            content_types=['code', 'repo', 'pr', 'issue']
+        )
 
         return Agent(
             role="Senior Software Engineer",
-            goal="Review PRs and provide insightful comments, with specific focus on {topic}. \
-I will code and remove //todo comments from the code",
-            backstory="You're a senior engineer with extensive experience in code quality and best practices. \
+            goal="Review PRs and provide insightful comments, and suggest improvements to the codebase.",
+            backstory="\
+You're a senior engineer with extensive experience in code quality and best practices. \
 You provide constructive feedback on PRs, asking questions and suggesting improvements as needed.",
             tools=[pr_review_tool, githubSearchTool],
-            allow_code_execution=True
-            verbose=True
-        )
-
-    @agent
-    def project_owner(self) -> Agent:
-        pr_review_tool = PrReviewTool(repo=self.repo)
-        return Agent(
-            role="Project Owner",
-            goal="Ensure PRs align with project goals, standards, and roadmap priorities. \
-I will code and add //todo comments on the code",
-            backstory="As the project owner, you're focused on the big picture and overall project alignment. \
-You evaluate changes based on their relevance to project objectives and whether they follow \
-established project standards.",
-            tools=[pr_review_tool],
-            verbose=True
+            allow_code_execution=True,
+            verbose=True,
         )
 
     @agent
     def staff_engineer(self) -> Agent:
         pr_review_tool = PrReviewTool(repo=self.repo)
+        githubSearchTool = GithubSearchTool(
+            gh_token=os.environ["GITHUB_TOKEN"],
+            content_types=['code', 'repo', 'pr', 'issue']
+        )
         return Agent(
             role="Staff Engineer",
             goal="Assess architectural implications of PRs and ensure scalability, security, and reliability.",
             backstory="You're a staff engineer with deep technical expertise, responsible for upholding the \
 project's architectural integrity. You review PRs for potential impact on system architecture, \
 scalability, and technical debt.",
-            tools=[pr_review_tool],
+            tools=[pr_review_tool, githubSearchTool],
             verbose=True
         )
 
@@ -75,6 +57,7 @@ project manager will suggest to close the PR ending the interaction",
             backstory="As the project manager, you're focused on project timelines, resource allocation, and risk. \
 You assess PRs for potential impact on deadlines and coordinate necessary resources to support ongoing work.",
             tools=[pr_review_tool],
+            allow_delegation=True,
             verbose=True
         )
 
@@ -82,11 +65,11 @@ You assess PRs for potential impact on deadlines and coordinate necessary resour
     def analyze_repository_context(self) -> Task:
         return Task(
             description="""Build comprehensive project context:
-            - Read and analyze repository README
-            - Understand project structure and architecture
-            - Review contribution guidelines
-            - Identify key project patterns and standards
-            - Map dependencies and integrations""",
+- Read and analyze repository README
+- Understand project structure and architecture
+- Review contribution guidelines
+- Identify key project patterns and standards
+- Map dependencies and integrations""",
             expected_output="Project context report with key architectural and standard guidelines",
             agent=self.staff_engineer()
         )
@@ -94,61 +77,72 @@ You assess PRs for potential impact on deadlines and coordinate necessary resour
     @task
     def gather_pr_information(self) -> Task:
         return Task(
+            context=[self.analyze_repository_context()],
             description="""Collect and analyze all PR information:
-            - List all modified files
-            - Get PR description and context
-            - Identify key changes and their purpose""",
-            expected_output="Comprehensive report of PR changes and context",
-            agent=self.pr_reviewer()
-        )
-
-    @task
-    def technical_analysis(self) -> Task:
-        return Task(
-            description="""""",
-            expected_output="Technical analysis report with specific findings",
+- Fetch all open PRs from the repository
+- Retrieve all comments on PRs and individual files
+- Identify key changes, their purposes, and any associated issues or discussions
+- Summarize the overall impact of the PRs on the project""",
+            expected_output="Comprehensive report of PR changes, comments, and contextual information",
             agent=self.staff_engineer()
         )
 
     @task
-    def requirements_validation(self) -> Task:
+    def review_the_code(self) -> Task:
         return Task(
-            description="""Validate code changes against requirements:
-            - Compare changes with PR description
-            - Verify alignment with project standards
-            - Check architectural consistency
-            - Assess impact on existing functionality""",
-            expected_output="Validation report with requirements compliance status",
-            agent=self.project_owner()
+            context=[self.gather_pr_information()],
+            description="""Perform a detailed code review of the collected PRs:
+- Analyze code changes for adherence to coding standards and best practices
+- Identify any potential bugs, security vulnerabilities, or performance issues
+- Ensure that the code aligns with the project's architectural guidelines
+- Highlight areas of improvement and suggest refactoring where necessary""",
+            expected_output="Detailed code review reports highlighting issues, suggestions, and approvals",
+            agent=self.pr_reviewer()
         )
 
     @task
-    def review_completion_check(self) -> Task:
+    def propose_changes(self) -> Task:
         return Task(
-            description="""Evaluate review completeness:
-            - Review all previous task outputs
-            - Identify any gaps in the review
-            - Determine if additional information is needed""",
-            expected_output="Review status report with completion assessment",
-            agent=self.project_manager()
+            context=[self.review_the_code()],
+            description="""Propose necessary changes based on the code review:
+- Draft comments on specific lines or sections of the PRs with improvement suggestions
+- Suggest code modifications or enhancements to address identified issues
+- Collaborate with the PR author to iterate on the proposed changes
+- Ensure that all suggestions are constructive and align with project goals""",
+            expected_output="List of proposed changes and comments submitted to the relevant PRs",
+            agent=self.pr_reviewer()
         )
 
     @task
-    def request_changes(self) -> Task:
+    def address_comments(self) -> Task:
         return Task(
-            description="""Handle necessary change requests:
-            - Compile all identified issues
-            - Format clear and actionable feedback
-            - Prioritize requested changes
-            - Provide helpful suggestions for improvements""",
-            expected_output="Formatted change requests ready for PR comments",
-            agent=self.project_manager()
+            context=[self.propose_changes()],
+            description="""Address existing comments and feedback on the PRs:
+- Respond to comments made by reviewers or team members
+- Implement changes based on feedback and update the PR accordingly
+- Ensure that all discussions are resolved and that the PR meets all requirements
+- Coordinate with the project manager to close PRs once all criteria are satisfied""",
+            expected_output="Updated PRs with resolved comments and final approvals ready for merging",
+            agent=self.pr_reviewer()
         )
 
     @crew
     def crew(self) -> Crew:
         return Crew(
+            agents=[
+                self.staff_engineer(),
+                self.pr_reviewer(),
+                self.project_manager()
+            ],
+            tasks=[
+                self.analyze_repository_context(),
+                self.gather_pr_information(),
+                self.review_the_code(),
+                self.propose_changes(),
+                self.address_comments()
+            ],
             process=Process.sequential,
-            manager_agent=self.manager(),
+            manager_agent=self.project_manager(),
+            memory=True,
             verbose=2
         )
