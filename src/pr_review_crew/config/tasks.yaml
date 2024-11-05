@@ -1,3 +1,4 @@
+# Reviewed by CodeReviewTool
 fetch_prs:
   description: "Fetch open PRs from the repository."
   expected_output: "A list of open PRs with metadata including title, description, and file changes."
