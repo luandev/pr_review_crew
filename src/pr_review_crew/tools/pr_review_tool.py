@@ -7,7 +7,7 @@ import base64
 
 class PrReviewTool(BaseTool):
     repo: str = ""
-    headers: str = ""
+    headers: dict = {}
     github_token: str = ""
     name: str = "PR Review Tool"
     description: str = (
@@ -22,16 +22,18 @@ class PrReviewTool(BaseTool):
         :param repo: Repository name in the format 'owner/repo'
         """
         super().__init__()
-        self.repo = os.getenv("REPO")  # GitHub token from environment
+        self.repo = repo  # Use the provided repo instead of environment variable
         self.github_token = os.getenv("GITHUB_TOKEN")  # GitHub token from environment
+        if not self.github_token:
+            raise ValueError("GITHUB_TOKEN environment variable not set.")
         self.headers = {
             "Authorization": f"token {self.github_token}",
             "Accept": "application/vnd.github.v3+json"
         }
 
     def fetch_open_prs(self):
-        """Fetch open PRs from the GitHub repository."""
-        url = f"https://api.github.com/repos/{self.repo}/pulls"
+        """Fetch and list all open PRs from the GitHub repository."""
+        url = f"https://api.github.com/repos/{self.repo}/pulls?state=open"
         response = requests.get(url, headers=self.headers)
 
         if response.status_code == 200:
@@ -42,7 +44,7 @@ class PrReviewTool(BaseTool):
             return []
 
     def fetch_pr_files(self, pr_number):
-        """Fetch the list of files changed in a PR, along with diffs."""
+        """Fetch all files changed in a specific PR along with their diffs."""
         url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/files"
         response = requests.get(url, headers=self.headers)
 
@@ -53,15 +55,133 @@ class PrReviewTool(BaseTool):
             print(f"Failed to fetch PR files: {response.status_code} - {response.text}")
             return []
 
-    def analyze_diff_for_todos(self, diff_text):
-        """Identify TODOs, FIXMEs, and comments needing attention in the diff."""
-        todos = []
+    def analyze_diff(self, diff_text):
+        """
+        Analyze the diff of a file or chunks of files to identify TODOs, FIXMEs, and other comments.
+
+        :param diff_text: The diff text of a file
+        :return: A list of identified issues in the diff
+        """
+        issues = []
         lines = diff_text.splitlines()
         for line in lines:
-            # Simple regex to find TODOs and FIXMEs in code
             if re.search(r"\b(TODO|FIXME)\b", line, re.IGNORECASE):
-                todos.append(line)
-        return todos
+                issues.append(line)
+        return issues
+
+    def mark_file_reviewed(self, pr_number, file_path):
+        """
+        Mark a file as reviewed by the tool using GitHub's review API.
+
+        :param pr_number: The number of the PR
+        :param file_path: The path of the file to mark as reviewed
+        """
+        url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/comments"
+        # GitHub API does not have a direct way to mark a file as reviewed.
+        # As a workaround, you can add a comment indicating the review.
+        comment_body = f"✅ The file `{file_path}` has been reviewed by the PR Review Tool."
+        data = {
+            "body": comment_body
+        }
+        response = requests.post(url, headers=self.headers, data=json.dumps(data))
+        if response.status_code in [200, 201]:
+            print(f"Marked {file_path} as reviewed in PR #{pr_number}.")
+        else:
+            print(f"Failed to mark file as reviewed: {response.status_code} - {response.text}")
+
+    def get_pr_comments(self, pr_number):
+        """Retrieve all comments on a specific PR."""
+        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code == 200:
+            comments = response.json()
+            return comments
+        else:
+            print(f"Failed to fetch PR comments: {response.status_code} - {response.text}")
+            return []
+
+    def get_file_comments(self, pr_number, file_path):
+        """Retrieve all comments on a specific file within a PR."""
+        url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/comments"
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code == 200:
+            comments = response.json()
+            file_comments = [comment for comment in comments if comment.get('path') == file_path]
+            return file_comments
+        else:
+            print(f"Failed to fetch file comments: {response.status_code} - {response.text}")
+            return []
+
+    def post_change_suggestion(self, pr_number, file_path, line_num, suggestion):
+        """
+        Post a suggestion for a change on a specific line of a file in a PR.
+
+        :param pr_number: The number of the PR
+        :param file_path: The path of the file
+        :param line_num: The line number to suggest a change
+        :param suggestion: The suggestion text
+        """
+        # To post a suggestion, you need the commit ID and the position in the diff
+        # This requires additional API calls to get the diff position
+        # For simplicity, we'll add a general comment instead
+
+        comment_body = f"💡 **Suggestion:** {suggestion}"
+        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
+        data = {
+            "body": comment_body
+        }
+        response = requests.post(url, headers=self.headers, data=json.dumps(data))
+        if response.status_code in [200, 201]:
+            print(f"Posted change suggestion on {file_path} in PR #{pr_number}.")
+        else:
+            print(f"Failed to post change suggestion: {response.status_code} - {response.text}")
+
+    def pr_comment(self, pr_number, comment, reply_to_id=None):
+        """
+        Post a comment or reply to an existing comment on a PR.
+
+        :param pr_number: The number of the PR
+        :param comment: The comment text
+        :param reply_to_id: The ID of the comment to reply to (optional)
+        """
+        if reply_to_id:
+            url = f"https://api.github.com/repos/{self.repo}/issues/comments/{reply_to_id}/replies"
+            # GitHub API for replying to comments is currently in preview and may require special headers
+            # As of now, it's not widely supported; instead, you can use issue comments with a reference
+            # Here, we'll add a general comment as a workaround
+            print("Replying to comments is not directly supported via the GitHub API.")
+            return
+
+        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
+        data = {
+            "body": comment
+        }
+        response = requests.post(url, headers=self.headers, data=json.dumps(data))
+        if response.status_code in [200, 201]:
+            print(f"Posted comment on PR #{pr_number}.")
+        else:
+            print(f"Failed to post comment: {response.status_code} - {response.text}")
+
+    def file_comment(self, pr_number, file_path, comment, reply_to_id=None):
+        """
+        Post a comment or reply to an existing comment on a specific file in a PR.
+
+        :param pr_number: The number of the PR
+        :param file_path: The path of the file
+        :param comment: The comment text
+        :param reply_to_id: The ID of the comment to reply to (optional)
+        """
+        if reply_to_id:
+            # Similar to pr_comment, replying directly is not straightforward
+            print("Replying to file comments is not directly supported via the GitHub API.")
+            return
+
+        # To comment on a specific file, you need to specify the path and position
+        # This requires the diff position, which is complex to determine
+        # For simplicity, we'll add a general comment on the PR
+        self.post_change_suggestion(pr_number, file_path, None, comment)
 
     def propose_commit_for_todo_fix(self, pr_number, file_path, line_num, fix_suggestion):
         """Create a new commit in the PR to address a TODO or comment."""
@@ -87,7 +207,10 @@ class PrReviewTool(BaseTool):
 
             # Modify the content (here, just adding the suggestion for demonstration)
             content_lines = content_decoded.splitlines()
-            content_lines.insert(line_num, fix_suggestion)
+            if line_num is not None and 0 <= line_num < len(content_lines):
+                content_lines.insert(line_num, fix_suggestion)
+            else:
+                content_lines.append(fix_suggestion)
             updated_content = "\n".join(content_lines)
 
             # Encode updated content in base64 for GitHub API
@@ -121,13 +244,15 @@ class PrReviewTool(BaseTool):
             diff_text = file.get("patch", "")
 
             # Analyze diff for TODOs and FIXMEs
-            todos = self.analyze_diff_for_todos(diff_text)
-            for todo in todos:
+            issues = self.analyze_diff(diff_text)
+            for issue in issues:
                 # Create comments or commits for each TODO
-                # Here, we simulate making a suggestion as a commit for each TODO
                 fix_suggestion = "# TODO item addressed\n"
-                line_num = diff_text.splitlines().index(todo)
+                line_num = diff_text.splitlines().index(issue)
                 self.propose_commit_for_todo_fix(pr_number, file_path, line_num, fix_suggestion)
+
+            # Mark file as reviewed after processing
+            self.mark_file_reviewed(pr_number, file_path)
 
     def _run(self, argument: str) -> str:
         """
