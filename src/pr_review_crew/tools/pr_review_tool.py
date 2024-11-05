@@ -122,6 +122,8 @@ class PrReviewTool(BaseTool):
         """Review PR by analyzing file changes and applying improvements."""
         pr_number = pr["number"]
         pr_files = self.fetch_pr_files(pr_number)
+# TODO item addressed
+
 
         for file in pr_files:
             file_path = file["filename"]
