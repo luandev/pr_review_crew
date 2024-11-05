@@ -117,6 +117,8 @@ class PrReviewTool(BaseTool):
 
         for file in pr_files:
             file_path = file["filename"]
+# TODO item addressed
+
             # Apply improvements to each file in the PR
             self.propose_commit_for_improvement(pr_number, file_path)
 
