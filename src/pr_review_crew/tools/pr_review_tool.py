@@ -1,282 +1,351 @@
-from crewai_tools import BaseTool
+from typing import List, Optional
+from crewai_tools import tool
 import requests
-import os
 import json
 import logging
-from typing import List, Optional
+import base64
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class PrReviewTool(BaseTool):
-    repo: str
-    headers: dict
-    github_token: str
-    name: str = "PR Review Tool"
-    description: str = (
-        "Helps provide thorough code reviews, identify potential issues, and suggest improvements for PRs."
-    )
+# Define REPO as a fixed constant
+REPO = os.getenv("REPO")  # Replace with the actual repository path
 
-    def __init__(self, repo: str):
-        """
-        Initialize the PR Review Tool with repository details.
+def get_headers() -> dict:
+    """
+    Retrieve the GitHub headers required for API authentication.
+    """
+    github_token = os.getenv("GITHUB_TOKEN")
+    if not github_token:
+        raise ValueError("GITHUB_TOKEN environment variable not set.")
+    return {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3.diff"
+    }
 
-        :param repo: Repository name in the format 'owner/repo'
-        """
-        super().__init__()
-        self.repo = repo
-        self.github_token = os.getenv("GITHUB_TOKEN")
-        if not self.github_token:
-            raise ValueError("GITHUB_TOKEN environment variable not set.")
-        self.headers = {
-            "Authorization": f"token {self.github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+@tool("Fetch Changed Lines")
+def fetch_changed_lines(pr_number: int, file_path: Optional[str] = None) -> str:
+    """
+    Fetches the changed lines in a file or an entire PR.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/files"
+    params = {"per_page": 100}
+    changed_lines = {}
 
-    def fetch_open_prs(self) -> List[dict]:
-        """Fetch and list all open PRs from the GitHub repository."""
-        url = f"https://api.github.com/repos/{self.repo}/pulls?state=open"
-        response = requests.get(url, headers=self.headers)
+    try:
+        while url:
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch PR files: {response.status_code} - {response.text}")
+                return "Failed to fetch PR files."
 
-        if response.status_code == 200:
-            prs = response.json()
-            logger.info(f"Fetched {len(prs)} open PR(s).")
-            return prs
-        else:
-            logger.error(f"Failed to fetch PRs: {response.status_code} - {response.text}")
-            return []
-
-    def fetch_pr_files(self, pr_number: int) -> List[dict]:
-        """Fetch all files changed in a specific PR along with their diffs."""
-        url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/files"
-        response = requests.get(url, headers=self.headers)
-
-        if response.status_code == 200:
             files = response.json()
-            logger.info(f"Fetched {len(files)} file(s) for PR #{pr_number}.")
-            return files
-        else:
-            logger.error(f"Failed to fetch PR files: {response.status_code} - {response.text}")
-            return []
-
-    def analyze_diff(self, pr_number: int, file_path: Optional[str] = None) -> List[str]:
-        """
-        Retrieve all changed lines in a PR or a specific file in diff format.
-
-        :param pr_number: The number of the PR
-        :param file_path: The path of the file (optional). If None, retrieves changed lines for all files in the PR.
-        :return: A list of changed lines prefixed with '+' (added) or '-' (removed)
-        """
-        changed_lines = []
-
-        if file_path:
-            logger.info(f"Retrieving changed lines for file '{file_path}' in PR #{pr_number}.")
-            files = self.fetch_pr_files(pr_number)
-            file = next((f for f in files if f['filename'] == file_path), None)
-            if not file:
-                logger.error(f"File '{file_path}' not found in PR #{pr_number}.")
-                return changed_lines
-            diff_text = file.get('patch', '')
-            if not diff_text:
-                logger.warning(f"No changes detected in file '{file_path}' for PR #{pr_number}.")
-                return changed_lines
-            changed_lines = self._extract_changed_lines(diff_text)
-        else:
-            logger.info(f"Retrieving all changed lines in PR #{pr_number}.")
-            files = self.fetch_pr_files(pr_number)
             for file in files:
-                diff_text = file.get('patch', '')
-                if not diff_text:
-                    logger.info(f"No changes detected in file '{file.get('filename')}' for PR #{pr_number}.")
+                current_file_path = file.get('filename')
+                if file_path and current_file_path != file_path:
                     continue
-                file_changed_lines = self._extract_changed_lines(diff_text)
-                changed_lines.extend(file_changed_lines)
 
-        logger.debug(f"Total changed lines retrieved: {len(changed_lines)}")
-        return changed_lines
+                patch = file.get('patch')
+                if not patch:
+                    logger.warning(f"No patch available for file: {current_file_path}")
+                    continue
 
-    def _extract_changed_lines(self, diff_text: str) -> List[str]:
-        """
-        Helper method to extract changed lines from diff text.
+                added, removed = parse_patch(patch)
+                changed_lines[current_file_path] = {
+                    "added_lines": added,
+                    "removed_lines": removed
+                }
 
-        :param diff_text: The diff text of a file
-        :return: A list of changed lines prefixed with '+' (added) or '-' (removed)
-        """
-        changed = []
-        for line in diff_text.split('\n'):
-            if line.startswith('+') and not line.startswith('+++'):
-                changed.append(line)
-            elif line.startswith('-') and not line.startswith('---'):
-                changed.append(line)
-        logger.debug(f"Extracted {len(changed)} changed lines from diff.")
-        return changed
+            url = None if 'Link' not in response.headers else parse_link_header(response.headers['Link']).get('next')
 
-    def mark_file_reviewed(self, pr_number: int, file_path: str):
-        """
-        Mark a file as reviewed by the tool using GitHub's review API.
-
-        :param pr_number: The number of the PR
-        :param file_path: The path of the file to mark as reviewed
-        """
-        url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/comments"
-        comment_body = f"✅ The file `{file_path}` has been reviewed by the PR Review Tool."
-        data = {
-            "body": comment_body
-        }
-        response = requests.post(url, headers=self.headers, data=json.dumps(data))
-        if response.status_code in [200, 201]:
-            logger.info(f"Marked '{file_path}' as reviewed in PR #{pr_number}.")
+        if changed_lines:
+            return f"Fetched changed lines for PR #{pr_number}."
         else:
-            logger.error(f"Failed to mark file as reviewed: {response.status_code} - {response.text}")
+            return "No changed lines found."
 
-    def get_pr_comments(self, pr_number: int) -> List[dict]:
-        """Retrieve all comments on a specific PR."""
-        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
-        response = requests.get(url, headers=self.headers)
+    except Exception as e:
+        logger.error(f"An error occurred while fetching changed lines: {str(e)}")
+        return "Error occurred while fetching changed lines."
 
-        if response.status_code == 200:
-            comments = response.json()
-            logger.info(f"Fetched {len(comments)} comment(s) for PR #{pr_number}.")
-            return comments
+def parse_patch(patch: str) -> (List[str], List[str]):
+    """
+    Parses the patch text to extract added and removed lines.
+    """
+    added_lines = []
+    removed_lines = []
+    lines = patch.splitlines()
+    for line in lines:
+        if line.startswith('+') and not line.startswith('+++'):
+            added_lines.append(line[1:].strip())
+        elif line.startswith('-') and not line.startswith('---'):
+            removed_lines.append(line[1:].strip())
+    return added_lines, removed_lines
+
+def parse_link_header(link_header: str) -> dict:
+    """
+    Parses the Link header from GitHub API to get pagination URLs.
+    """
+    links = {}
+    for part in link_header.split(','):
+        section = part.strip().split(';')
+        if len(section) != 2:
+            continue
+        url_part = section[0].strip()[1:-1]
+        rel_part = section[1].strip().split('=')[1].strip('"')
+        links[rel_part] = url_part
+    return links
+
+@tool("Fetch Open PRs")
+def fetch_open_prs() -> str:
+    """
+    Fetches and lists all open PRs from the specified GitHub repository.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/pulls?state=open"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        prs = response.json()
+        count = len(prs)
+        logger.info(f"Fetched {count} open PR(s) from {REPO}.")
+        return f"Fetched {count} open PR(s) from {REPO}."
+    else:
+        logger.error(f"Failed to fetch PRs: {response.status_code} - {response.text}")
+        return "Failed to fetch open PRs."
+
+@tool("Create Pull Request")
+def create_pull_request(title: str, body: str, head: str, base: str = "main") -> str:
+    """
+    Creates a new pull request.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/pulls"
+    data = {
+        "title": title,
+        "head": head,
+        "base": base,
+        "body": body
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+
+    if response.status_code == 201:
+        pr = response.json()
+        logger.info(f"Pull request '{title}' created successfully: {pr['html_url']}")
+        return f"Pull request '{title}' created successfully."
+    else:
+        logger.error(f"Failed to create pull request: {response.status_code} - {response.text}")
+        return "Failed to create pull request."
+
+@tool("Mark File as Reviewed")
+def mark_file_reviewed(pr_number: int, file_path: str) -> str:
+    """
+    Marks a file as reviewed by the tool using GitHub's review API.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/pulls/{pr_number}/comments"
+    comment_body = f"✅ The file `{file_path}` has been reviewed by the PR Review Tool."
+    data = {
+        "body": comment_body
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+
+    if response.status_code in [200, 201]:
+        logger.info(f"Marked {file_path} as reviewed in PR #{pr_number}.")
+        return f"Marked {file_path} as reviewed in PR #{pr_number}."
+    else:
+        logger.error(f"Failed to mark file as reviewed: {response.status_code} - {response.text}")
+        return "Failed to mark file as reviewed."
+
+@tool("Get PR Comments")
+def get_pr_comments(pr_number: int) -> str:
+    """
+    Retrieves all comments on a specific PR.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/issues/{pr_number}/comments"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        comments = response.json()
+        count = len(comments)
+        logger.info(f"Retrieved {count} comment(s) from PR #{pr_number}.")
+        return f"Retrieved {count} comment(s) from PR #{pr_number}."
+    else:
+        logger.error(f"Failed to fetch PR comments: {response.status_code} - {response.text}")
+        return "Failed to fetch PR comments."
+
+@tool("Post Change Suggestion")
+def post_change_suggestion(pr_number: int, file_path: str, suggestion: str) -> str:
+    """
+    Posts a suggestion for a change on a specific line of a file in a PR.
+    """
+    headers = get_headers()
+    comment_body = f"💡 **Suggestion:** {suggestion}"
+    url = f"https://api.github.com/repos/{REPO}/issues/{pr_number}/comments"
+    data = {
+        "body": comment_body
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(data))
+
+    if response.status_code in [200, 201]:
+        logger.info(f"Posted change suggestion on '{file_path}' in PR #{pr_number}.")
+        return f"Posted change suggestion on '{file_path}' in PR #{pr_number}."
+    else:
+        logger.error(f"Failed to post change suggestion: {response.status_code} - {response.text}")
+        return "Failed to post change suggestion."
+
+@tool("Create File")
+def create_file(branch_name: str, file_path: str, content: str, commit_message: str) -> str:
+    """
+    Creates or updates a file in the repository.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/contents/{file_path}"
+    params = {"ref": branch_name}
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code == 200:
+        sha = response.json().get('sha')
+        logger.info(f"File '{file_path}' exists. Preparing to update.")
+    elif response.status_code == 404:
+        sha = None
+        logger.info(f"File '{file_path}' does not exist. Preparing to create.")
+    else:
+        logger.error(f"Failed to fetch file info: {response.status_code} - {response.text}")
+        return "Failed to fetch file info."
+
+    encoded_content = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    data = {
+        "message": commit_message,
+        "content": encoded_content,
+        "branch": branch_name
+    }
+    if sha:
+        data["sha"] = sha
+
+    response = requests.put(url, headers=headers, data=json.dumps(data))
+
+    if response.status_code in [200, 201]:
+        logger.info(f"File '{file_path}' committed successfully on branch '{branch_name}'.")
+        return f"File '{file_path}' committed successfully on branch '{branch_name}'."
+    else:
+        logger.error(f"Failed to create/update file: {response.status_code} - {response.text}")
+        return "Failed to create/update file."
+
+@tool("Create Branch")
+def create_branch(branch_name: str, base_branch: str = "main") -> str:
+    """
+    Creates a new branch from the base branch in the specified GitHub repository.
+    
+    :param branch_name: The name of the new branch to create.
+    :param base_branch: The base branch from which to create the new branch (default is "main").
+    :return: A success or failure message indicating the outcome of the branch creation.
+    """
+    headers = get_headers()
+
+    # Get the SHA of the base branch's latest commit
+    base_branch_url = f"https://api.github.com/repos/{REPO}/git/ref/heads/{base_branch}"
+    response = requests.get(base_branch_url, headers=headers)
+    if response.status_code != 200:
+        logger.error(f"Failed to fetch base branch: {response.status_code} - {response.text}")
+        return "Failed to fetch base branch."
+
+    base_ref = response.json()
+    sha = base_ref['object']['sha']
+    logger.info(f"Base branch '{base_branch}' SHA: {sha}")
+
+    # Create new branch reference
+    new_branch_url = f"https://api.github.com/repos/{REPO}/git/refs"
+    data = {
+        "ref": f"refs/heads/{branch_name}",
+        "sha": sha
+    }
+    response = requests.post(new_branch_url, headers=headers, data=json.dumps(data))
+
+    if response.status_code == 201:
+        logger.info(f"Branch '{branch_name}' created successfully.")
+        return f"Branch '{branch_name}' created successfully."
+    elif response.status_code == 422 and 'Reference already exists' in response.text:
+        logger.warning(f"Branch '{branch_name}' already exists.")
+        return f"Branch '{branch_name}' already exists."
+    else:
+        logger.error(f"Failed to create branch: {response.status_code} - {response.text}")
+        return "Failed to create branch."
+    
+
+    from crewai_tools import tool
+import requests
+import json
+import logging
+import base64
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Define REPO as a fixed constant
+REPO = "owner/repo_name"  # Replace with the actual repository path
+
+def get_headers() -> dict:
+    """
+    Retrieve the GitHub headers required for API authentication.
+    """
+    github_token = os.getenv("GITHUB_TOKEN")
+    if not github_token:
+        raise ValueError("GITHUB_TOKEN environment variable not set.")
+    return {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+@tool("List Files in Repo")
+def list_files_in_repo(branch: str = "main") -> str:
+    """
+    Lists all files in the specified repository and branch.
+
+    :param branch: The branch from which to list files (default is "main").
+    :return: A string message listing all files in the repository or an error message.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/git/trees/{branch}?recursive=1"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        files_data = response.json()
+        files = [file['path'] for file in files_data.get('tree', []) if file['type'] == 'blob']
+        if files:
+            logger.info(f"Files in repo '{REPO}' on branch '{branch}': {files}")
+            return "\n".join(files)
         else:
-            logger.error(f"Failed to fetch PR comments: {response.status_code} - {response.text}")
-            return []
+            return "No files found in the repository."
+    else:
+        logger.error(f"Failed to list files: {response.status_code} - {response.text}")
+        return "Failed to list files in the repository."
 
-    def get_file_comments(self, pr_number: int, file_path: str) -> List[dict]:
-        """Retrieve all comments on a specific file within a PR."""
-        url = f"https://api.github.com/repos/{self.repo}/pulls/{pr_number}/comments"
-        response = requests.get(url, headers=self.headers)
+@tool("Download File from Repo")
+def download_file_from_repo(file_path: str, branch: str = "main") -> str:
+    """
+    Downloads a specific file from the repository and branch.
 
-        if response.status_code == 200:
-            comments = response.json()
-            file_comments = [comment for comment in comments if comment.get('path') == file_path]
-            logger.info(f"Fetched {len(file_comments)} comment(s) for file '{file_path}' in PR #{pr_number}.")
-            return file_comments
-        else:
-            logger.error(f"Failed to fetch file comments: {response.status_code} - {response.text}")
-            return []
+    :param file_path: The path of the file to download.
+    :param branch: The branch from which to download the file (default is "main").
+    :return: The content of the file as a string if successful, or an error message.
+    """
+    headers = get_headers()
+    url = f"https://api.github.com/repos/{REPO}/contents/{file_path}?ref={branch}"
+    response = requests.get(url, headers=headers)
 
-    def post_change_suggestion(self, pr_number: int, file_path: str, line_num: Optional[int], suggestion: str):
-        """
-        Post a suggestion for a change on a specific line of a file in a PR.
-
-        :param pr_number: The number of the PR
-        :param file_path: The path of the file
-        :param line_num: The line number to suggest a change (optional)
-        :param suggestion: The suggestion text
-        """
-        comment_body = f"💡 **Suggestion:** {suggestion}"
-        if line_num:
-            comment_body += f" (Line {line_num})"
-
-        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
-        data = {
-            "body": comment_body
-        }
-        response = requests.post(url, headers=self.headers, data=json.dumps(data))
-        if response.status_code in [200, 201]:
-            logger.info(f"Posted change suggestion on '{file_path}' in PR #{pr_number}.")
-        else:
-            logger.error(f"Failed to post change suggestion: {response.status_code} - {response.text}")
-
-    def pr_comment(self, pr_number: int, comment: str, reply_to_id: Optional[int] = None):
-        """
-        Post a comment or reply to an existing comment on a PR.
-
-        :param pr_number: The number of the PR
-        :param comment: The comment text
-        :param reply_to_id: The ID of the comment to reply to (optional)
-        """
-        if reply_to_id:
-            # GitHub API does not support direct replies to comments via the standard API.
-            # A workaround is to reference the parent comment in the reply.
-            comment_body = f"Reply to comment ID {reply_to_id}: {comment}"
-        else:
-            comment_body = comment
-
-        url = f"https://api.github.com/repos/{self.repo}/issues/{pr_number}/comments"
-        data = {
-            "body": comment_body
-        }
-        response = requests.post(url, headers=self.headers, data=json.dumps(data))
-        if response.status_code in [200, 201]:
-            logger.info(f"Posted comment on PR #{pr_number}.")
-        else:
-            logger.error(f"Failed to post comment: {response.status_code} - {response.text}")
-
-    def file_comment(self, pr_number: int, file_path: str, comment: str, reply_to_id: Optional[int] = None):
-        """
-        Post a comment or reply to an existing comment on a specific file in a PR.
-
-        :param pr_number: The number of the PR
-        :param file_path: The path of the file
-        :param comment: The comment text
-        :param reply_to_id: The ID of the comment to reply to (optional)
-        """
-        if reply_to_id:
-            # Similar to pr_comment, direct replies are not supported.
-            comment_body = f"Reply to comment ID {reply_to_id}: {comment}"
-        else:
-            comment_body = comment
-
-        # To comment on a specific file and line, you would need the position or commit ID.
-        # This requires additional API calls and is more complex.
-        # For simplicity, we'll add a general comment referencing the file.
-
-        suggestion = f"{comment} (File: `{file_path}`)"
-        self.post_change_suggestion(pr_number, file_path, None, suggestion)
-
-    def review_and_comment_or_commit(self, pr: dict):
-        """
-        Review a single PR, retrieve changed lines, and post comments or suggestions.
-
-        :param pr: The PR data as a dictionary
-        """
-        pr_number = pr['number']
-        pr_title = pr.get('title', 'No Title')
-        pr_body = pr.get('body', '')
-        logger.info(f"Reviewing PR #{pr_number}: {pr_title}")
-
-        changed_lines = self.analyze_diff(pr_number)
-
-        if not changed_lines:
-            logger.warning(f"No changed lines to review for PR #{pr_number}.")
-            return
-
-        for line in changed_lines:
-            if line.startswith('+'):
-                # Example: Handle added lines
-                suggestion = f"Consider reviewing the addition: {line[1:].strip()}"
-                self.post_change_suggestion(pr_number, None, None, suggestion)
-            elif line.startswith('-'):
-                # Example: Handle removed lines
-                suggestion = f"Consider reviewing the removal: {line[1:].strip()}"
-                self.post_change_suggestion(pr_number, None, None, suggestion)
-
-        # Optionally, mark the entire PR as reviewed
-        self.mark_file_reviewed(pr_number, "All files")
-
-        logger.info(f"Completed review for PR #{pr_number}.")
-
-    def _run(self, argument: str) -> str:
-        """
-        Execute the PR review process.
-
-        :param argument: Argument could be any additional information passed to the tool
-        :return: Summary of the review process
-        """
-        prs = self.fetch_open_prs()
-        if not prs:
-            return "No open PRs found."
-
-        review_summary = []
-        for pr in prs:
-            try:
-                self.review_and_comment_or_commit(pr)
-                review_summary.append(f"Reviewed PR #{pr['number']} - {pr.get('title', 'No Title')}.")
-            except Exception as e:
-                logger.error(f"Error reviewing PR #{pr['number']}: {str(e)}")
-                review_summary.append(f"Failed to review PR #{pr['number']}.")
-        
-        return "\n".join(review_summary) if review_summary else "No changes were made."
+    if response.status_code == 200:
+        file_data = response.json()
+        file_content = base64.b64decode(file_data['content']).decode('utf-8')
+        logger.info(f"Downloaded file '{file_path}' from branch '{branch}'.")
+        return file_content
+    elif response.status_code == 404:
+        logger.error(f"File '{file_path}' not found on branch '{branch}'.")
+        return f"File '{file_path}' not found on branch '{branch}'."
+    else:
+        logger.error(f"Failed to download file: {response.status_code} - {response.text}")
+        return "Failed to download file."
