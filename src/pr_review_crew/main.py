@@ -12,6 +12,6 @@ from pr_review_crew.pr_creation_crew import PrCreationCrew
 def run():
     # Replace with your inputs, it will automatically interpolate any tasks and agents information
     inputs = {
-        'topic': 'improove the code'
+        'topic': 'github_repo=luandev/pr_review_crew'
     }
     PrCreationCrew().crew().kickoff(inputs=inputs)

@@ -1,5 +1,9 @@
-from typing import List, Optional
-from crewai_tools import tool
+import zipfile
+from typing import Optional, List, Type
+from crewai_tools import tool, BaseTool
+from pydantic import BaseModel, Field
+
+import io
 import requests
 import json
 import logging
@@ -276,19 +280,6 @@ def create_branch(branch_name: str, base_branch: str = "main") -> str:
         return "Failed to create branch."
     
 
-    from crewai_tools import tool
-import requests
-import json
-import logging
-import base64
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Define REPO as a fixed constant
-REPO = "owner/repo_name"  # Replace with the actual repository path
-
 def get_headers() -> dict:
     """
     Retrieve the GitHub headers required for API authentication.
@@ -301,51 +292,106 @@ def get_headers() -> dict:
         "Accept": "application/vnd.github.v3+json"
     }
 
-@tool("List Files in Repo")
-def list_files_in_repo(branch: str = "main") -> str:
-    """
-    Lists all files in the specified repository and branch.
+class ListFilesInRepoInput(BaseModel):
+    branch: str = Field(default="main", description="The branch to list files from.")
 
-    :param branch: The branch from which to list files (default is "main").
-    :return: A string message listing all files in the repository or an error message.
-    """
-    headers = get_headers()
-    url = f"https://api.github.com/repos/{REPO}/git/trees/{branch}?recursive=1"
-    response = requests.get(url, headers=headers)
+# The main tool class
+class ListFilesInRepoTool(BaseTool):
+    name: str = "List Files in Repo"
+    description: str = "Lists all files in the specified repository and branch."
+    args_schema: Type[BaseModel] = ListFilesInRepoInput
 
-    if response.status_code == 200:
-        files_data = response.json()
-        files = [file['path'] for file in files_data.get('tree', []) if file['type'] == 'blob']
-        if files:
-            logger.info(f"Files in repo '{REPO}' on branch '{branch}': {files}")
-            return "\n".join(files)
+    def _run(self, branch: str = "main") -> str:
+        """
+        Executes the tool to list files in the given branch.
+        """
+        headers = get_headers()
+        url = f"https://api.github.com/repos/{REPO}/git/trees/{branch}?recursive=1"
+        print(f"URL: {url}")
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            files_data = response.json()
+            files = [file['path'] for file in files_data.get('tree', []) if file['type'] == 'blob']
+            if files:
+                logger.info(f"Files in repo '{REPO}' on branch '{branch}': {files}")
+                return "\n".join(files)
+            else:
+                return "No files found in the repository."
         else:
-            return "No files found in the repository."
-    else:
-        logger.error(f"Failed to list files: {response.status_code} - {response.text}")
-        return "Failed to list files in the repository."
+            logger.error(f"Failed to list files: {response.status_code} - {response.text}")
+            return "Failed to list files in the repository."
 
-@tool("Download File from Repo")
-def download_file_from_repo(file_path: str, branch: str = "main") -> str:
-    """
-    Downloads a specific file from the repository and branch.
+# Input schema for the DownloadFileFromRepoTool
+class DownloadFileFromRepoInput(BaseModel):
+    file_path: str = Field(..., description="The path of the file to download.")
+    branch: str = Field(default="main", description="The branch to download the file from.")
 
-    :param file_path: The path of the file to download.
-    :param branch: The branch from which to download the file (default is "main").
-    :return: The content of the file as a string if successful, or an error message.
-    """
-    headers = get_headers()
-    url = f"https://api.github.com/repos/{REPO}/contents/{file_path}?ref={branch}"
-    response = requests.get(url, headers=headers)
+# The main tool class
+class DownloadFileFromRepoTool(BaseTool):
+    name: str = "Download File from Repo"
+    description: str = "Downloads a specific file from the repository and branch."
+    args_schema: Type[BaseModel] = DownloadFileFromRepoInput
 
-    if response.status_code == 200:
-        file_data = response.json()
-        file_content = base64.b64decode(file_data['content']).decode('utf-8')
-        logger.info(f"Downloaded file '{file_path}' from branch '{branch}'.")
-        return file_content
-    elif response.status_code == 404:
-        logger.error(f"File '{file_path}' not found on branch '{branch}'.")
-        return f"File '{file_path}' not found on branch '{branch}'."
-    else:
-        logger.error(f"Failed to download file: {response.status_code} - {response.text}")
-        return "Failed to download file."
+    def _run(self, file_path: str, branch: str = "main") -> str:
+        """
+        Executes the tool to download a file from the given branch.
+        """
+        headers = get_headers()
+        url = f"https://api.github.com/repos/{REPO}/contents/{file_path}?ref={branch}"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            file_data = response.json()
+            file_content = base64.b64decode(file_data['content']).decode('utf-8')
+            logger.info(f"Downloaded file '{file_path}' from branch '{branch}'.")
+            return file_content
+        elif response.status_code == 404:
+            logger.error(f"File '{file_path}' not found on branch '{branch}'.")
+            return f"File '{file_path}' not found on branch '{branch}'."
+        else:
+            logger.error(f"Failed to download file: {response.status_code} - {response.text}")
+            return "Failed to download file."
+
+# Input schema for the DownloadRepositoryTool
+class DownloadRepositoryInput(BaseModel):
+    repo_url: str = Field(..., description="The URL of the GitHub repository to download.")
+    branch: str = Field(default="main", description="The branch to download (default is 'main').")
+
+# The main tool class
+class DownloadRepositoryTool(BaseTool):
+    name: str = "Download Repository"
+    description: str = "Downloads a GitHub repository as a zip file for a specified branch."
+    args_schema: Type[BaseModel] = DownloadRepositoryInput
+
+    def _run(self, repo_url: str, branch: str = "main", local_path: str = "./repo.zip") -> str:
+        """
+        Executes the tool to download a repository as a zip file for the specified branch.
+        """
+        # Extract the owner and repo name from the repo URL
+        try:
+            owner_repo = repo_url.rstrip('/').split("/")[-2:]
+            if len(owner_repo) != 2:
+                raise ValueError("Invalid GitHub repository URL.")
+            owner, repo = owner_repo
+        except Exception as e:
+            logger.error(f"Failed to parse the repository URL: {str(e)}")
+            return f"Failed to parse the repository URL: {str(e)}"
+
+        # GitHub API URL for downloading a zip archive of the repository
+        zip_url = f"https://api.github.com/repos/{owner}/{repo}/zipball/{branch}"
+        headers = get_headers()
+
+        try:
+            response = requests.get(zip_url, headers=headers, stream=True)
+            if response.status_code == 200:
+                with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                    z.extractall('/tmp/repo')
+                logger.info(f"Repository downloaded and extracted to '{'/tmp/repo'}'.")
+                return f"Repository downloaded and extracted to '{'/tmp/repo'}'."
+            else:
+                logger.error(f"Failed to download repository: {response.status_code} - {response.text}")
+                return f"Failed to download repository: {response.status_code} - {response.text}"
+        except Exception as e:
+            logger.error(f"An error occurred: {str(e)}")
+            return f"An error occurred: {str(e)}"

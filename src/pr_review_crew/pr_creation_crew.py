@@ -1,10 +1,44 @@
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
-from crewai_tools import GithubSearchTool
-from pr_review_crew.tools.pr_review_tool import create_pull_request, create_file, create_branch, post_change_suggestion, list_files_in_repo, download_file_from_repo
+from crewai_tools import GithubSearchTool, CodeInterpreterTool, DirectoryReadTool, FileReadTool, DirectorySearchTool, WebsiteSearchTool
+from pr_review_crew.tools.pr_review_tool import ListFilesInRepoTool, DownloadFileFromRepoTool, DownloadRepositoryTool
+from datetime import datetime
 import os
 import warnings
 import logging
+import litellm
+
+litellm.set_verbose=True
+
+clone_repo_tool = DownloadRepositoryTool()
+list_files_tool = ListFilesInRepoTool()
+download_file_tool = DownloadFileFromRepoTool()
+code_interpreter_tool = CodeInterpreterTool()
+directory_read_tool = DirectoryReadTool()
+file_read_tool = FileReadTool()
+directory_search_tool = DirectorySearchTool()
+website_search_tool = WebsiteSearchTool()
+base_tools = [
+    # list_files_tool,
+    # download_file_tool,
+    # code_interpreter_tool,
+    directory_read_tool,
+    file_read_tool,
+    directory_search_tool,
+    # website_search_tool,
+    clone_repo_tool
+]
+
+llm = LLM(
+    model="ollama/llama3.2:3b", 
+    base_url="http://localhost:11434"
+)
+
+def step_callback(step):
+    print(f"Step: {step}")
+
+def task_callback(task):
+    print(f"Task completed: {task.description}")
 
 # Suppress specific warnings temporarily
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -16,7 +50,7 @@ logging.basicConfig(level=logging.DEBUG)
 class PrCreationCrew:
     repo = os.getenv("REPO")
     github_token = os.getenv("GITHUB_TOKEN")
-
+    
     @agent
     def feature_ideator(self) -> Agent:
         # Tools needed: Search tool to analyze the repository state
@@ -27,18 +61,17 @@ class PrCreationCrew:
         )
         
         return Agent(
+            llm=llm,
             role="Product Manager",
-            goal="Identify and propose new features or improvements for the project.",
+            goal="Identify and propose new features or improvements for the project {topic}",
             backstory=(
                 "You are a product manager with a keen eye for enhancing the project. "
                 "Your role is to analyze the current state of the repository, identify areas "
                 "for improvement, and propose actionable features or enhancements."
             ),
-            tools=[github_search_tool],
-            cache=True,
             verbose=True,
-            max_rpm=3,
-            max_iter=2
+            step_callback=step_callback,
+            task_callback=task_callback,
         )
 
     # @agent
@@ -69,24 +102,40 @@ class PrCreationCrew:
             repo=self.repo
         )
         return Agent(
+            llm=llm,
             role="Software Developer",
-            goal="Create and manage pull requests to integrate new features or improvements.",
+            goal="Create and manage pull requests to integrate new features or improvements of {topic} repo.",
             backstory=(
                 "You specialize in creating and managing pull requests. Your responsibility is to ensure "
                 "that PRs are well-documented, follow the project's contribution guidelines, and are "
                 "ready for review by the team."
             ),
-            tools=[create_pull_request, create_branch, create_file, post_change_suggestion,  list_files_in_repo, download_file_from_repo],
-            cache=True,
+            tools=base_tools,
             verbose=True,
-            max_rpm=3,
-            max_iter=2
+            step_callback=step_callback,
+            task_callback=task_callback,
+            max_rpm=30,
+            max_iter=10
         )
+
+    @task
+    def get_repo(self) -> Task:
+        return Task(description="""Clone the repository""",  expected_output="local folder repo path", agent=self.software_developer())
+    
+    @task
+    def get_readme_context(self) -> Task:
+        return Task(description="""Read some of the key files like readme to understand project overall""",  expected_output="Repo overall context" , agent=self.software_developer())
+    
+    @task
+    def get_context(self) -> Task:
+        return Task(description="""Read some of the deeper files to understand project more toroughly""",  expected_output="Repo context" , agent=self.software_developer())
+    
 
     @task
     def analyze_repository_context(self) -> Task:
         return Task(
             description="""Build comprehensive project context:
+- Clone the repository into a local folder loke ./repo_clone
 - Read and analyze repository files
 - Understand project structure and architecture
 - Review contribution guidelines
@@ -136,18 +185,31 @@ class PrCreationCrew:
 
     @crew
     def crew(self) -> Crew:
+        # Create a logs directory if it doesn't exist
+        logs_dir = "logs"
+        os.makedirs(logs_dir, exist_ok=True)
+
+        # Generate a dynamic filename based on the current date and time
+        current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"crew_log_{current_time}.txt"
+
+        # Combine the directory and filename
+        log_filepath = os.path.join(logs_dir, log_filename)
         return Crew(
             agents=[
-                self.feature_ideator(),
-                self.software_developer()
+                self.software_developer(),
+                self.feature_ideator()
             ],
             tasks=[
-                self.analyze_repository_context(),
-                self.suggest_new_feature(),
-                self.implement_feature(),
-                self.create_pull_request()
+                self.get_repo(),
+                self.get_readme_context(),
+                self.get_context(),
+                # self.suggest_new_feature(),
+                # self.implement_feature(),
+                # self.create_pull_request()
             ],
             process=Process.sequential,
             memory=True,
-            verbose=2
+            output_log_file=log_filepath,
+            verbose=True
         )

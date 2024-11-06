@@ -6,10 +6,14 @@ authors = ["Your Name <you@example.com>"]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<=3.13"
-crewai = {extras = ["tools"], version = "^0.30.11"}
+crewai = {extras = ["tools"], version = "^0.76.9"}
 
 [tool.poetry.scripts]
 pr_review_crew = "pr_review_crew.main:run"
+
+[tool.poetry.group.dev.dependencies]
+crewai = "^0.76.9"
+crewai-tools = "^0.13.4"
 
 [build-system]
 requires = ["poetry-core"]
