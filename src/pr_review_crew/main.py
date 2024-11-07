@@ -1,17 +1,17 @@
 #!/usr/bin/env python
-from pr_review_crew.pr_creation_crew import PrCreationCrew
+import logging
+import warnings
+import litellm
+import os
+from pr_review_crew.news_injest_crew import crew
 
-
-# def run():
-#     # Replace with your inputs, it will automatically interpolate any tasks and agents information
-#     inputs = {
-#         'topic': 'Fix all todos and improove the code'
-#     }
-#     PrReviewCrewCrew().crew().kickoff(inputs=inputs)
-
+os.environ['LITELLM_LOG'] = 'DEBUG'
 def run():
+    # Suppress specific warnings temporarily
+    warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
     # Replace with your inputs, it will automatically interpolate any tasks and agents information
     inputs = {
         'topic': 'github_repo=luandev/pr_review_crew'
     }
-    PrCreationCrew().crew().kickoff(inputs=inputs)
+    crew.kickoff(inputs=inputs)
