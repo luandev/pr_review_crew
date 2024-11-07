@@ -10,7 +10,7 @@ class OllamaAgent(Agent):
     #   gemma2:latest    5.4 GB  
     #   llama3:latest    4.7 GB 
     default_llm: ClassVar[LLM] = LLM(
-        model="llama3.2:3b",
+        model="ollama/gemma2",
         base_url="http://localhost:11434",
         temperature=0.7,
         timeout=60

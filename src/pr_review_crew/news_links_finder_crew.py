@@ -1,31 +1,42 @@
 import asyncio
+from datetime import datetime
 from crewai import Crew, Agent, Task
 from crewai_tools import SerperDevTool
 from pr_review_crew.custom_tools import AddToQueueTool
 from pr_review_crew.ollama_agent import OllamaAgent  # Import custom tool for adding URLs to queue
 
-
+# Get today's date formatted as "YYYY-MM-DD"
+today_date = datetime.now().strftime("%Y-%m-%d")
 
 # News Links Finder Agent setup
 news_links_finder_agent = OllamaAgent(
     role="News Links Finder",
-    goal="Continuously find URLs for news articles",
-    tools=[AddToQueueTool(), SerperDevTool()],  # Tool to add URLs to the queue
+    goal="Find today's news articles and add their URLs to the queue.",
+    tools=[AddToQueueTool(), SerperDevTool()],
     max_iter=100,
     verbose=True
 )
 
-# Define a task that uses the agent
-news_links_finder_task = Task(
-    description="Find and add URLs to the queue",
-    expected_output="Content from URLs added to the content queue",  # Define the expected output
+# Task to search for today's news articles
+search_today_news_task = Task(
+    description=f"Search for news articles related to today's date: {today_date}.",
+    expected_output="List of news article URLs found for today.",
+    agent=news_links_finder_agent
+)
+
+# Task to process search results and add URLs to the queue
+add_urls_to_queue_task = Task(
+    context=[search_today_news_task],
+    description="Extract URLs from the search results and add them to the queue.",
+    expected_output="URLs added to the queue successfully.",
     agent=news_links_finder_agent
 )
 
 # Assemble the crew
 news_links_finder_crew_instance = Crew(
+    memory=True,
     agents=[news_links_finder_agent],
-    tasks=[news_links_finder_task]
+    tasks=[search_today_news_task, add_urls_to_queue_task]
 )
 
 # Continuous function to kickoff news links finder crew

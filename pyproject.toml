@@ -10,10 +10,16 @@ crewai = {extras = ["tools"], version = "^0.76.9"}
 
 [tool.poetry.scripts]
 pr_review_crew = "pr_review_crew.main:run"
+mypy = "mypy ."
 
 [tool.poetry.group.dev.dependencies]
 crewai = "^0.76.9"
 crewai-tools = "^0.13.4"
+mypy = "^1.13.0"
+pydantic = {extras = ["mypy"], version = "^2.9.2"}
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
 
 [build-system]
 requires = ["poetry-core"]

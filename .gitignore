@@ -1,5 +1,8 @@
 .env
+.mypy_cache
+.vscode
 __pycache__/
 db
 logs
 research
+news_queues

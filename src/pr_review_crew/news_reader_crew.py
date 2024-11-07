@@ -38,8 +38,9 @@ news_queue_task = Task(
 
 # Assemble the crew
 news_reader_crew_instance = Crew(
+    memory=True,
     agents=[news_reader_agent],
-    tasks=[news_queue_task, news_scrape_task, news_reader_task]
+    tasks=[news_queue_task]
 )
 
 # Continuous function to kickoff news reader crew

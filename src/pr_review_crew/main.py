@@ -3,7 +3,7 @@ import logging
 import warnings
 import asyncio
 import os
-from pr_review_crew.news_links_finder_crew import news_links_finder_crew
+from pr_review_crew.news_links_finder_crew import continuous_news_links_finder
 from pr_review_crew.news_reader_crew import continuous_news_reader
 from pr_review_crew.article_writer_crew import continuous_article_writer
 
@@ -16,9 +16,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 # Async function to run the news ingestion workflow
 async def run_news_ingestion_pipeline():
     await asyncio.gather(
-        news_links_finder_crew(),
-        continuous_news_reader(),
-        continuous_article_writer()
+        continuous_news_links_finder(),
+        # continuous_news_reader(),
+        # continuous_article_writer()
     )
 
 def run():
